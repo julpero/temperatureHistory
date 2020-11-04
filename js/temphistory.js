@@ -4,6 +4,11 @@ $(function() {
         console.log(selection);
         window.location = "index.php?loc="+selection;
     });
+    $(".monthButton").on("click", function() {
+        var selection = $('#locationSelect option:selected')[0].value;
+        console.log(selection);
+        window.location = "index.php?loc="+selection+"&mon="+this.value;
+    });
 });
 
 Date.prototype.mmdd = function() {

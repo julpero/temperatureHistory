@@ -5,13 +5,14 @@ include_once 'db_conn.php';
 DEFINE("SERVER_URL", "https://opendata.fmi.fi/wfs");
 DEFINE("STORED_QUERY_AVG_OBSERVATION", "fmi::observations::weather::daily::multipointcoverage");
 
-DEFINE("MINYEAR", 2015);
+DEFINE("MINYEAR", 1960);
 
 $conn = new mysqli(DB_SERVER, DB_USER, DB_PASS, DB);
 if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
+$colorMapping = array();
 
 function getObservationStationOptions($obsStations, $selectedStation) {
     $retOptions = "";
@@ -110,7 +111,8 @@ function serieDateToQueryParam($date) {
 
 function addValuesToDatabase($conn, $locationSelect, $values) {
     foreach ($values as $ind => $value) {
-        if (!$conn->query("CALL addObservation (@Oid, ".$locationSelect.", '".$value[0]."', ".$value[1].", ".$value[2].", ".$value[3].");")) {
+        $month = intval(substr($value[0], 4, 2));
+        if (!$conn->query("CALL addObservation (@Oid, ".$locationSelect.", '".$value[0]."', ".$month.", ".$value[1].", ".$value[2].", ".$value[3].");")) {
             error_log($conn->error);
         }
     }
@@ -163,7 +165,6 @@ function parseValues($tmpValues) {
     return array();
 }
 
-
 function getTemperatures($conn, $missingObservationsAsSeries, $location, $locationSelect) {
     // exit(print_r($missingObservationsAsSeries));
     foreach ($missingObservationsAsSeries as $key => $serie) {
@@ -179,7 +180,149 @@ function getTemperatures($conn, $missingObservationsAsSeries, $location, $locati
     }
 }
 
-$monthSelect = isset($_GET["mon"]) ? $_GET["mon"] : date("m");
+function getObservationValues($conn, $locationSelect, $monthSelect) {
+    $retArr = array();
+    $month = intval($monthSelect);
+    if ($result = $conn->query("CALL getObservationValues ({$locationSelect}, {$month});")) {
+        while ($row = $result->fetch_assoc()) {
+            $datepart = $row["datepart"];
+            $minTemp = floatval($row["minTemp"]);
+            $maxTemp = floatval($row["maxTemp"]);
+            $avgTemp = floatval($row["avgTemp"]);
+
+            $year = substr($datepart, 0, 4);
+            $date = substr($datepart, 4, 4);
+
+            if (isset($retArr[$date])) {
+                if ($retArr[$date][0] > $minTemp) {
+                    $retArr[$date][0] = $minTemp;
+                    $retArr[$date][1] = $year;
+                }
+                if ($retArr[$date][2] < $minTemp) {
+                    $retArr[$date][2] = $minTemp;
+                    $retArr[$date][3] = $year;
+                }
+                $retArr[$date][4] = ($retArr[$date][4]*$retArr[$date][5] + $avgTemp) / ($retArr[$date][5] + 1);
+                $retArr[$date][5]++;
+            } else {
+                $retArr[$date] = [$minTemp, $year, $maxTemp, $year, $avgTemp, 1];
+            }
+        }
+        $result->free();
+        $conn->next_result();
+    } else {
+        error_log($conn->error);
+    }
+    return $retArr;
+}
+
+function h2rgb ($initT) {
+    $t = $initT < 0 ? $initT + 1 : fmod($initT, 1);
+
+    if ($t < (1 / 6)) {
+        return round($t * 1530);
+    }
+    if ($t < (1 / 2)) {
+        return 255;
+    }
+    if ($t < (2 / 3)) {
+        return round(((2 / 3) - $t) * 1530);
+    }
+    return 0;
+}
+
+function map ($hue) {
+    return [
+        h2rgb($hue - (1 / 3)), // r
+        h2rgb($hue), // g
+        h2rgb($hue + (1 / 3)) // g
+    ];
+}
+
+function numberToColor($num, $states) {
+    global $colorMapping;
+
+    if (!isset($colorMapping[$states])) {
+        $colorMapping[$states] = array();
+        for ($i = 0; $i <= $states; $i++) {
+            array_push($colorMapping[$states], map($i / $states));
+        }
+    }
+    return $colorMapping[$states][$num];
+}
+
+function yearToColor($year, $states) {
+    $rgb = numberToColor($year, $states);
+    $r = substr("0".dechex($rgb[0]), -2);
+    $g = substr("0".dechex($rgb[1]), -2);
+    $b = substr("0".dechex($rgb[2]), -2);
+    return "#{$r}{$g}{$b}";
+}
+
+function addColumns() {
+    $retStr = "";
+    $thisYear = intval(date("Y"));
+    for ($i = MINYEAR; $i <= $thisYear; $i++) {
+        $retStr.= "data.addColumn('number', 'min".$i."');\n";
+        $retStr.= "data.addColumn('number', 'max".$i."');\n";
+    }
+    return $retStr;
+}
+
+function addSeries() {
+    $tmpArr = array();
+    array_push($tmpArr, "0:{color: 'black', visibleInLegend: false}\n");
+    $thisYear = intval(date("Y"));
+    $counter = 1;
+    $yearCounter = 0;
+    $states = intval(($thisYear - MINYEAR + 1) * 1.4);
+    for ($i = MINYEAR; $i <= $thisYear; $i++) {
+        $color = yearToColor($yearCounter, $states);
+        array_push($tmpArr, $counter.":{color: '{$color}', visibleInLegend: false}\n");
+        $counter++;
+        array_push($tmpArr, $counter.":{color: '{$color}', visibleInLegend: false}\n");
+        $counter++;
+        $yearCounter++;
+    }
+    return implode(",", $tmpArr);
+}
+
+function addRows($countedValues) {
+    $tmpArr = array();
+    $thisYear = intval(date("Y"));
+    foreach ($countedValues as $ind => $values) {
+        $retStr = "['{$ind}', {$values[4]}";
+        for ($i = MINYEAR; $i <= $thisYear; $i++) {
+            $retStr.= $values[1] == $i ? ", {$values[0]}" : ", null";
+            $retStr.= $values[3] == $i ? ", {$values[2]}" : ", null";
+        }
+        $retStr.="]\n";
+        array_push($tmpArr, $retStr);
+    }
+    return implode(",", $tmpArr);
+}
+
+function printLegend() {
+    $tmpArr = array();
+    $thisYear = intval(date("Y"));
+    $yearCounter = 0;
+    $states = intval(($thisYear - MINYEAR + 1) * 1.4);
+    for ($i = MINYEAR; $i <= $thisYear; $i++) {
+        $color = yearToColor($yearCounter, $states);
+        array_push($tmpArr, "<span style=\"background-color: {$color}\">{$i}</span>\n");
+        $yearCounter++;
+    }
+    return implode("", $tmpArr);
+}
+
+$monthSelect = isset($_GET["mon"]) ? substr("0".$_GET["mon"], -2) : date("m");
+$monthVal = intval($monthSelect);
+$prevMonth = $monthVal - 1;
+$nextMonth = $monthVal + 1;
+$monthName = date('F', mktime(0, 0, 0, $monthVal, 10));
+
+if ($prevMonth < 1) $prevMonth = 12;
+if ($nextMonth > 12) $nextMonth = 1;
 
 $locationSelect = isset($_GET["loc"]) ? $_GET["loc"] : "";
 if ($locationSelect != "") {
@@ -187,6 +330,8 @@ if ($locationSelect != "") {
     $missingObservations = missingObservations($currentObservations, $monthSelect);
     $missingObservationsAsSeries = missingObservationsAsSeries($missingObservations);
     getTemperatures($conn, $missingObservationsAsSeries, $obsStations[$locationSelect], $locationSelect);
+    $countedValues = getObservationValues($conn, $locationSelect, $monthSelect);
+    //exit(print_r($countedValues));
 }
 ?>
 
@@ -209,26 +354,38 @@ if ($locationSelect != "") {
             <option selected>Choose observation station</option>
             <?= getObservationStationOptions($obsStations, $locationSelect) ?>
         </select>
-        <div id="results">
+        <div class="row">
+            <div class="col-1"><button class="btn btn-primary monthButton" id="prevMonthButton" value="<?=$prevMonth?>"><<</button></div>
+            <div class="col-10 text-center" id="monthStr"><?=$monthName?> <?= MINYEAR ?>-<?= date("Y") ?></div>
+            <div class="col-1"><button class="btn btn-primary monthButton" id="nextMonthButton" value="<?=$nextMonth?>">>></button></div>
         </div>
+        <div class="row"><div class="col" id="results"></div></div>
+        <div class="row"><div class="col" id="legend"><?= printLegend() ?></div></div>
     </div>
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
-    <!-- <script src="js/metolib.js"></script> -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-    <!-- <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.20/lodash.min.js"></script> -->
-    <script src="./js/map.js"></script>
-    <script src="./js/index.js"></script>
     <script src="./js/temphistory.js"></script>
     <script type="text/javascript">
-        // google.charts.load("current", {packages:["corechart"]});
-        // google.charts.setOnLoadCallback(getTemps);
-        // var SERVER_URL = "https://opendata.fmi.fi/wfs";
-        // var STORED_QUERY_AVG_OBSERVATION = "fmi::observations::weather::daily::multipointcoverage";
-        // var STORED_QUERY_OBSERVATION = "fmi::observations::weather::multipointcoverage";
+        function drawTempChart() {
+            var data = new google.visualization.DataTable();
+            data.addColumn('string', 'Date');
+            data.addColumn('number', 'Avg');
+            <?= addColumns() ?>
 
-        // Metolib.WfsRequestParser = new Metolib.WfsRequestParser();
+            data.addRows([
+                <?= addRows($countedValues) ?>
+            ]);
 
-        // var thisMonth = [];
+            var options = {
+                series: {
+                    <?= addSeries() ?>
+                }
+            };
+            var chart = new google.visualization.ScatterChart(document.getElementById('results'));
+            chart.draw(data, options);
+        }
+        google.charts.load("current", {packages:["corechart"]});
+        google.charts.setOnLoadCallback(drawTempChart);
     </script>
 </body>
 </html>
