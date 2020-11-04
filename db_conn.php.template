@@ -1,0 +1,8 @@
+<?php
+
+DEFINE("DB_SERVER", "");
+DEFINE("DB", "");
+DEFINE("DB_USER", "");
+DEFINE("DB_PASS", "");
+
+?>
