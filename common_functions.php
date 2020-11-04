@@ -1,42 +1,5 @@
 <?php
 
-/**
- * Removes invalid XML
- *
- * @access public
- * @param string $value
- * @return string
- */
-function stripInvalidXml($value)
-{
-    $ret = "";
-    $current;
-    if (empty($value)) 
-    {
-        return $ret;
-    }
-
-    $length = strlen($value);
-    for ($i=0; $i < $length; $i++)
-    {
-        $current = ord($value[$i]);
-        if (($current == 0x9) ||
-            ($current == 0xA) ||
-            ($current == 0xD) ||
-            (($current >= 0x20) && ($current <= 0xD7FF)) ||
-            (($current >= 0xE000) && ($current <= 0xFFFD)) ||
-            (($current >= 0x10000) && ($current <= 0x10FFFF)))
-        {
-            $ret .= chr($current);
-        }
-        else
-        {
-            $ret .= " ";
-        }
-    }
-    return $ret;
-}
-
 function download_remote_file_with_curl($file_domain, $query_id, $query_param)
 {
 	$url = $file_domain."?request=getFeature&storedquery_id=".$query_id."&".$query_param;
@@ -73,17 +36,15 @@ function download_remote_file_with_curl($file_domain, $query_id, $query_param)
 		error_log(json_encode($ch));
 	}
 	curl_close($ch);
-	//$file_content = preg_replace(UTFREGEX, '$1', $file_content);
-	//$file_content = stripInvalidXml($file_content);
 	
     $doc = new DOMDocument('1.0', 'utf-8');
     $doc->loadXML($file_content);
+    // exit ($doc->saveXML());
     return $doc;
     // $elements = $doc->getElementsByTagNameNS('http://www.opengis.net/gml/3.2', 'doubleOrNilReasonTupleList');
     // if ($elements->length == 1) return $elements->item(0)->nodeValue;
 
     // exit ($file_content);
-    // exit ($doc->saveXML());
     
 	
 }

@@ -30,6 +30,8 @@ function getObservationStations($conn) {
             $stationName = $row["observationstation_name"];
             $retArr[$stationId] = $stationName;
         }
+        $result->free();
+        $conn->next_result();
     } else {
         error_log($conn->error);
     }
@@ -43,6 +45,8 @@ function getObservations($conn, $locationSelect) {
             $datepart = $row["datepart"];
             array_push($retArr, $datepart);
         }
+        $result->free();
+        $conn->next_result();
     } else {
         error_log($conn->error);
     }
@@ -54,13 +58,14 @@ $obsStations = getObservationStations($conn);
 function missingObservations($currentObservations, $monthSelect) {
     $retArr = array();
     $thisYear = intval(date("Y"));
+    $maxDate = intval(date("Ymd"));
     for ($i = MINYEAR; $i <= $thisYear; $i++) {
         $chkStartDate = DateTime::createFromFormat("Ymd", "{$i}{$monthSelect}01");
         $daysInMonth = date("t", $chkStartDate->getTimestamp());
         for ($j = 1; $j <= $daysInMonth; $j++) {
             $dayStr = ($j < 10) ? "0".$j : $j;
             $chkStr = "{$i}{$monthSelect}{$dayStr}";
-            if (!in_array($chkStr, $currentObservations)) array_push($retArr, $chkStr);
+            if (!in_array($chkStr, $currentObservations) && intval($chkStr) < $maxDate) array_push($retArr, $chkStr);
         }
     }
 
@@ -69,29 +74,109 @@ function missingObservations($currentObservations, $monthSelect) {
 
 function isNext($cur, $next) {
     $chkStartDate = DateTime::createFromFormat("Ymd", $cur);
-    return strtotime("tomorrow", $chkStartDate->getTimestamp()) == DateTime::createFromFormat("Ymd", $next)->getTimestamp();
+    return date("Ymd", strtotime("tomorrow", $chkStartDate->getTimestamp())) == $next;
 }
 
-function missingObservationsAsSeries() {
+function missingObservationsAsSeries($missingObservations) {
     $retArr = array();
+
+    $startOfSerie = "";
+    $endOfSerie = "";
+
+    for ($i = 0; $i < count($missingObservations); $i++) {
+        if ($startOfSerie == "") {
+            $startOfSerie = $missingObservations[$i];
+        }
+
+        if ($startOfSerie != "") {
+            if ($i + 1 == count($missingObservations) || !isNext($missingObservations[$i], $missingObservations[$i+1])) {
+                $endOfSerie = $missingObservations[$i];
+            }
+        }
+
+        if ($startOfSerie != "" && $endOfSerie != "") {
+            array_push($retArr, [$startOfSerie, $endOfSerie]);
+            $startOfSerie = "";
+            $endOfSerie = "";
+        }
+    }
 
     return $retArr;
 }
 
-function getTemperatures($missingObservations, $location, $monthSelect) {
-    $thisYear = date("Y");
-    $nextMonthStr = (intval($monthSelect)+1) < 10 ? "0".(intval($monthSelect)+1) : "".(intval($monthSelect)+1);
-    $lastMonth = intval($monthSelect) == 12 ? (intval($thisYear)+1)."-01" : $thisYear."-".$nextMonthStr;
-    $query_param = "parameters=tday,tmin,tmax&starttime={$thisYear}-{$monthSelect}-01T00:00:00Z&endtime={$lastMonth}-01T00:00:00Z&place=".$location;
-    return download_remote_file_with_curl(SERVER_URL, STORED_QUERY_AVG_OBSERVATION, $query_param);
+function serieDateToQueryParam($date) {
+    return substr($date, 0, 4)."-".substr($date, 4, 2)."-".substr($date, 6, 2);
+}
+
+function addValuesToDatabase($conn, $locationSelect, $values) {
+    foreach ($values as $ind => $value) {
+        if (!$conn->query("CALL addObservation (@Oid, ".$locationSelect.", '".$value[0]."', ".$value[1].", ".$value[2].", ".$value[3].");")) {
+            error_log($conn->error);
+        }
+    }
+}
+
+function parseTempValues($tempValues) {
+    $retArr = array();
+    $rows = explode("\n", $tempValues);
+    foreach ($rows as $ind => $row) {
+        $temps = explode(" ", trim($row));
+        if (count($temps) == 3) {
+            array_push($retArr, [$temps[0], $temps[1], $temps[2]]);
+        }
+    }
+    return $retArr;
+}
+
+function parseDateValues($dateValues) {
+    $retArr = array();
+    $rows = explode("\n", $dateValues);
+    foreach ($rows as $ind => $row) {
+        $temps = explode(" ", trim($row));
+        if (count($temps) == 4) {
+            array_push($retArr, date("Ymd", $temps[3]));
+        }
+    }
+    return $retArr;
+}
+
+function combineFMIArrays($tempArr, $dateArr) {
+    $retArr = array();
+    for ($i = 0; $i < count($tempArr); $i++) {
+        array_push($retArr, [$dateArr[$i], $tempArr[$i][0], $tempArr[$i][1], $tempArr[$i][2]]);
+    }
+    return $retArr;
 }
 
 function parseValues($tmpValues) {
+    $tempArr = array();
+    $dateArr = array();
     $tmpElements = $tmpValues->getElementsByTagNameNS('http://www.opengis.net/gml/3.2', 'doubleOrNilReasonTupleList');
-    if ($tmpElements->length == 1) return $tmpElements->item(0)->nodeValue;
+    if ($tmpElements->length == 1) $tempArr = parseTempValues($tmpElements->item(0)->nodeValue);
 
     $dateElements = $tmpValues->getElementsByTagNameNS('http://www.opengis.net/gmlcov/1.0', 'positions');
-    if ($dateElements->length == 1) return $dateElements->item(0)->nodeValue;
+    if ($dateElements->length == 1) $dateArr = parseDateValues($dateElements->item(0)->nodeValue);
+
+    if (count($tempArr) == count($dateArr) && count($tempArr) > 0) {
+        return combineFMIArrays($tempArr, $dateArr);
+    }
+    return array();
+}
+
+
+function getTemperatures($conn, $missingObservationsAsSeries, $location, $locationSelect) {
+    // exit(print_r($missingObservationsAsSeries));
+    foreach ($missingObservationsAsSeries as $key => $serie) {
+        $start = serieDateToQueryParam($serie[0]);
+        $end = serieDateToQueryParam($serie[1]);
+        $query_param = "parameters=tmin,tmax,tday&starttime={$start}T00:00:00Z&endtime={$end}T00:00:00Z&place=".$location;
+        $tmpData = download_remote_file_with_curl(SERVER_URL, STORED_QUERY_AVG_OBSERVATION, $query_param);
+        $parsedValues = parseValues($tmpData);
+        //exit(print_r($parsedValues));
+        if (count($parsedValues) > 0) {
+            addValuesToDatabase($conn, $locationSelect, $parsedValues);
+        }
+    }
 }
 
 $monthSelect = isset($_GET["mon"]) ? $_GET["mon"] : date("m");
@@ -100,8 +185,8 @@ $locationSelect = isset($_GET["loc"]) ? $_GET["loc"] : "";
 if ($locationSelect != "") {
     $currentObservations = getObservations($conn, $locationSelect);
     $missingObservations = missingObservations($currentObservations, $monthSelect);
-    $tmpValues = getTemperatures($missingObservations, $obsStations[$locationSelect], $monthSelect);
-    parseValues($tmpValues);
+    $missingObservationsAsSeries = missingObservationsAsSeries($missingObservations);
+    getTemperatures($conn, $missingObservationsAsSeries, $obsStations[$locationSelect], $locationSelect);
 }
 ?>
 
