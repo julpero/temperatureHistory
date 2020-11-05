@@ -1,15 +1,28 @@
 $(function() {
     $("#locationSelect").on("change", function() {
-        var selection = $('#locationSelect option:selected')[0].value;
-        console.log(selection);
-        window.location = "index.php?loc="+selection;
+        handleGo(0);
+        // var selection = $('#locationSelect option:selected')[0].value;
+        // window.location = "index.php?loc="+selection;
     });
     $(".monthButton").on("click", function() {
-        var selection = $('#locationSelect option:selected')[0].value;
-        console.log(selection);
-        window.location = "index.php?loc="+selection+"&mon="+this.value;
+        handleGo(this.value);
+        // var selection = $('#locationSelect option:selected')[0].value;
+        // window.location = "index.php?loc="+selection+"&mon="+this.value;
+    });
+    $("#showAll").on("click", function() {
+        handleGo(0);
     });
 });
+
+function handleGo(mon) {
+    var selection = $('#locationSelect option:selected')[0].value;
+    if (selection > 0) {
+        var monthVal = mon > 0 ? mon : $('#showAll').val();
+        var showAll = $('#showAll').prop('checked');
+        var showAllStr = showAll ? "1" : "0" ;
+        window.location = "index.php?loc="+selection+"&mon="+monthVal+"&all="+showAllStr;
+    }
+}
 
 Date.prototype.mmdd = function() {
     var mm = this.getMonth() + 1; // getMonth() is zero-based
