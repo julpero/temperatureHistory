@@ -332,11 +332,44 @@ function addSeries($showAll) {
     return implode(",", $tmpArr);
 }
 
-function addRows($countedValues, $showAll) {
+
+function getTrendingYearColor($yearlyAvgValues, $avgValue) {
+    $countOverAvg = 0;
+    $yearSumOverAvg = 0;
+    $countBelowAvg = 0;
+    $yearSumBelowAvg = 0;
+    $thisYear = intval(date("Y"));
+    for ($i = MINYEAR; $i <= $thisYear; $i++) {
+        if (isset($yearlyAvgValues[$i]) && isset($yearlyAvgValues[$i][2])) {
+            if ($yearlyAvgValues[$i][2] > $avgValue) {
+                $countOverAvg++;
+                $yearSumOverAvg+= $i;
+            } else if ($yearlyAvgValues[$i][2] < $avgValue) {
+                $countBelowAvg++;
+                $yearSumBelowAvg+= $i;
+            }
+        }
+    }
+    $over = $countOverAvg > 0 ? ($yearSumOverAvg/$countOverAvg) : null;
+    $below = $countBelowAvg > 0 ? ($yearSumBelowAvg/$countBelowAvg) : null;
+    $trending = $over - $below;
+    $states = intval(($thisYear - MINYEAR + 1) * 0.5)+1;
+    $stateValue = $trending == 0 ? intval($states / 2) : intval($trending + ($states / 2));
+    $color = yearToColor($stateValue, $states);
+    error_log("getTrendingYearColor: trending: {$trending}, stateValue: {$stateValue}, color: {$color}, states: {$states}, countOverAvg {$countOverAvg}, countBelowAvg: {$countBelowAvg}, yearSumOverAvg: {$yearSumOverAvg}, yearSumBelowAvg: {$yearSumBelowAvg}, over: {$over}, below: {$below}");
+    return $color;
+}
+
+function addRows($countedValues, $showAll, $allValuesToAvg) {
     $tmpArr = array();
     $thisYear = intval(date("Y"));
     foreach ($countedValues as $ind => $values) {
-        $retStr = "['{$ind}', {$values[4]}";
+        // error_log($ind);
+        // error_log( print_r($values, true));
+        // if (!is_null($allValuesToAvg) && isset($allValuesToAvg[$ind])) error_log( print_r($allValuesToAvg[$ind], true));
+        $avgValue = isset($values[4]) ? $values[4] : "null";
+        $fillStr = $showAll || !isset($allValuesToAvg[$ind]) ? "black" : getTrendingYearColor($allValuesToAvg[$ind], $avgValue);
+        $retStr = "['{$ind}', {$avgValue}, 'point {fill-color: {$fillStr}}'";
         for ($i = MINYEAR; $i <= $thisYear; $i++) {
             if ($showAll) {
                 // $retStr.= isset($countedValues[$ind][$i]) ? ", {$countedValues[$ind][$i][0]}" : ", null";

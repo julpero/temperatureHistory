@@ -34,6 +34,7 @@ if ($locationSelect != "") {
     $missingObservationsAsSeries = missingObservationsAsSeries($missingObservations);
     getTemperatures($conn, $missingObservationsAsSeries, $obsStations[$locationSelect], $locationSelect);
     $countedValues = getObservationValues($conn, $locationSelect, $monthSelect, $showAll);
+    $allValuesToAvg = $showAll ? null : getObservationValues($conn, $locationSelect, $monthSelect, true);
     // exit(print_r($countedValues));
 }
 
@@ -80,10 +81,11 @@ if ($locationSelect != "") {
             var data = new google.visualization.DataTable();
             data.addColumn('string', 'Date');
             data.addColumn('number', 'Avg');
+            data.addColumn({'type': 'string', 'role': 'style'});
             <?= addColumns($showAll) ?>
 
             data.addRows([
-                <?= addRows($countedValues, $showAll) ?>
+                <?= addRows($countedValues, $showAll, $allValuesToAvg) ?>
             ]);
 
             var options = {
